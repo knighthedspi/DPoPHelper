@@ -1,3 +1,4 @@
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
@@ -9,6 +10,21 @@ namespace DPoPHelper;
 /// <inheritdoc cref="IDPoPHelper" />
 public sealed class DPoPHelper : IDPoPHelper
 {
+    /// <summary>
+    /// One shared client for the process. A per-call HttpClient exhausts sockets under
+    /// load; PooledConnectionLifetime still lets pooled connections pick up DNS changes.
+    /// Timeout is Infinite here because each call applies its own CancellationToken.
+    /// </summary>
+    private static readonly HttpClient Client = new(
+        new SocketsHttpHandler
+        {
+            PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+            AllowAutoRedirect = false
+        })
+    {
+        Timeout = Timeout.InfiniteTimeSpan
+    };
+
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
         // base64url and URL values must not be escaped into \u sequences.
@@ -24,7 +40,8 @@ public sealed class DPoPHelper : IDPoPHelper
         string hTU,
         string jTI,
         long iAT,
-        string aTH)
+        string aTH,
+        string nonce = "")
     {
         if (string.IsNullOrWhiteSpace(privateKeyJWK))
             throw new ArgumentException("PrivateKeyJWK is required.", nameof(privateKeyJWK));
@@ -79,6 +96,12 @@ public sealed class DPoPHelper : IDPoPHelper
         if (!string.IsNullOrEmpty(aTH))
             payload["ath"] = aTH;
 
+        // RFC 9449 section 8: echo the server's nonce when it has issued one. Absent on
+        // the first attempt; the server answers 400 use_dpop_nonce with a DPoP-Nonce
+        // header, and the retry carries it here.
+        if (!string.IsNullOrEmpty(nonce))
+            payload["nonce"] = nonce;
+
         var headerSegment = Base64UrlEncode(Serialize(header));
         var payloadSegment = Base64UrlEncode(Serialize(payload));
         var signingInput = Encoding.ASCII.GetBytes(headerSegment + "." + payloadSegment);
@@ -90,6 +113,73 @@ public sealed class DPoPHelper : IDPoPHelper
         var signature = ecdsa.SignData(signingInput, publicKey.HashAlgorithm);
 
         return headerSegment + "." + payloadSegment + "." + Base64UrlEncode(signature);
+    }
+
+    /// <inheritdoc />
+    public void PostWithDPoP(
+        string uRL,
+        string body,
+        string dPoPProof,
+        out int statusCode,
+        out string responseBody,
+        out string dPoPNonce,
+        string contentType = "application/x-www-form-urlencoded",
+        int timeoutSeconds = 30)
+    {
+        if (string.IsNullOrWhiteSpace(uRL))
+            throw new ArgumentException("URL is required.", nameof(uRL));
+        if (string.IsNullOrWhiteSpace(dPoPProof))
+            throw new ArgumentException("DPoPProof is required.", nameof(dPoPProof));
+        if (!Uri.TryCreate(uRL, UriKind.Absolute, out var uri))
+            throw new ArgumentException($"URL \"{uRL}\" is not an absolute URI.", nameof(uRL));
+        if (timeoutSeconds is < 1 or > 300)
+            throw new ArgumentOutOfRangeException(nameof(timeoutSeconds), "TimeoutSeconds must be between 1 and 300.");
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, uri)
+        {
+            Content = new StringContent(body ?? string.Empty, Encoding.UTF8)
+        };
+
+        // StringContent appends "; charset=utf-8", which some strict servers reject on
+        // form posts, so the header is set explicitly from the caller's value.
+        request.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(contentType);
+        request.Headers.TryAddWithoutValidation("DPoP", dPoPProof);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+
+        // Send (not SendAsync) avoids sync-over-async blocking on the ODC request thread.
+        using var response = Client.Send(request, HttpCompletionOption.ResponseContentRead, cts.Token);
+
+        statusCode = (int)response.StatusCode;
+        dPoPNonce = ReadDPoPNonce(response);
+
+        using var reader = new StreamReader(
+            response.Content.ReadAsStream(cts.Token), Encoding.UTF8);
+        responseBody = reader.ReadToEnd();
+    }
+
+    /// <summary>
+    /// Reads the DPoP-Nonce header. Header names are case-insensitive, and a nonce on
+    /// an error response may land on either the response or the content headers, so
+    /// both collections are checked.
+    /// </summary>
+    private static string ReadDPoPNonce(HttpResponseMessage response)
+    {
+        if (response.Headers.TryGetValues("DPoP-Nonce", out var values))
+        {
+            var first = values.FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(first))
+                return first.Trim();
+        }
+
+        if (response.Content.Headers.TryGetValues("DPoP-Nonce", out var contentValues))
+        {
+            var first = contentValues.FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(first))
+                return first.Trim();
+        }
+
+        return string.Empty;
     }
 
     /// <summary>

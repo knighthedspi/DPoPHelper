@@ -173,6 +173,46 @@ public class CreateDPoPProofTests
     }
 
     [Fact]
+    public void Payload_omits_nonce_when_empty_and_includes_it_otherwise()
+    {
+        var (priv, pub) = NewKeyPair();
+
+        // First attempt: no server nonce yet.
+        var (_, without, _, _) = Decode(_sut.CreateDPoPProof(priv, pub, "POST", Htu, Jti, Iat, ""));
+        Assert.False(without.TryGetProperty("nonce", out _));
+
+        // Retry after a 400 use_dpop_nonce.
+        var (_, with, _, _) = Decode(
+            _sut.CreateDPoPProof(priv, pub, "POST", Htu, Jti, Iat, "", "eyJ7S_zG..."));
+        Assert.Equal("eyJ7S_zG...", with.GetProperty("nonce").GetString());
+    }
+
+    [Fact]
+    public void Payload_carries_both_ath_and_nonce_on_a_userinfo_retry()
+    {
+        var (priv, pub) = NewKeyPair();
+
+        var (_, payload, _, _) = Decode(
+            _sut.CreateDPoPProof(priv, pub, "GET", Htu, Jti, Iat, "athvalue", "noncevalue"));
+
+        Assert.Equal("athvalue", payload.GetProperty("ath").GetString());
+        Assert.Equal("noncevalue", payload.GetProperty("nonce").GetString());
+    }
+
+    [Fact]
+    public void Nonce_retry_still_verifies_and_keeps_the_same_key()
+    {
+        var (priv, pub) = NewKeyPair();
+
+        var first = _sut.CreateDPoPProof(priv, pub, "POST", Htu, Guid.NewGuid().ToString(), Iat, "");
+        var retry = _sut.CreateDPoPProof(priv, pub, "POST", Htu, Guid.NewGuid().ToString(), Iat, "", "n-0S6_WzA2Mj");
+
+        // Same session key => identical header => the jkt binding survives the retry.
+        Assert.Equal(first.Split('.')[0], retry.Split('.')[0]);
+        Assert.NotEqual(first, retry);
+    }
+
+    [Fact]
     public void Payload_omits_ath_when_empty_and_includes_it_otherwise()
     {
         var (priv, pub) = NewKeyPair();

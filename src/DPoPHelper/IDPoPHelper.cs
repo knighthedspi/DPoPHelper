@@ -41,5 +41,49 @@ public interface IDPoPHelper
         long iAT,
 
         [OSParameter(Description = "base64url(SHA-256(access_token)). Required for userinfo; pass an empty string otherwise.")]
-        string aTH);
+        string aTH,
+
+        [OSParameter(Description = "Server-supplied DPoP nonce from a DPoP-Nonce response header. Pass an empty string on the first attempt.")]
+        string nonce = "");
+
+    /// <summary>
+    /// POSTs a form-encoded body with a DPoP proof header and returns the response
+    /// together with any DPoP-Nonce the server supplied.
+    /// </summary>
+    /// <remarks>
+    /// Exists because the platform HTTP actions surface the response body and status
+    /// but not response headers, and the RFC 9449 nonce handshake is driven entirely
+    /// by the DPoP-Nonce response header. Endpoint-agnostic: use for PAR and token.
+    /// <para>
+    /// Non-2xx responses are returned, not thrown — the caller branches on StatusCode,
+    /// because a 400 carrying "use_dpop_nonce" is a normal part of the handshake.
+    /// Only transport failures (DNS, TLS, timeout) raise an exception.
+    /// </para>
+    /// </remarks>
+    [OSAction(
+        Description = "POSTs a form body with a DPoP header and returns status, body and the DPoP-Nonce response header.")]
+    void PostWithDPoP(
+        [OSParameter(Description = "Absolute URL to POST to.")]
+        string uRL,
+
+        [OSParameter(Description = "Request body, already encoded to match ContentType.")]
+        string body,
+
+        [OSParameter(Description = "The DPoP proof JWT for this request, sent as the DPoP header.")]
+        string dPoPProof,
+
+        [OSParameter(Description = "HTTP status code of the response.")]
+        out int statusCode,
+
+        [OSParameter(Description = "Raw response body.")]
+        out string responseBody,
+
+        [OSParameter(Description = "Value of the DPoP-Nonce response header, or empty when absent.")]
+        out string dPoPNonce,
+
+        [OSParameter(Description = "Content-Type of the request body.")]
+        string contentType = "application/x-www-form-urlencoded",
+
+        [OSParameter(Description = "Request timeout in seconds.")]
+        int timeoutSeconds = 30);
 }
