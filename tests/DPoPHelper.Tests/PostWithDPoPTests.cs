@@ -19,6 +19,7 @@ public class PostWithDPoPTests : IDisposable
     private string? _lastContentType;
     private string? _lastBody;
     private string? _lastMethod;
+    private string? _lastAuthorizationHeader;
 
     public PostWithDPoPTests()
     {
@@ -53,6 +54,7 @@ public class PostWithDPoPTests : IDisposable
 
             _lastMethod = ctx.Request.HttpMethod;
             _lastDPoPHeader = ctx.Request.Headers["DPoP"];
+            _lastAuthorizationHeader = ctx.Request.Headers["Authorization"];
             _lastContentType = ctx.Request.ContentType;
             using (var sr = new StreamReader(ctx.Request.InputStream, Encoding.UTF8))
                 _lastBody = sr.ReadToEnd();
@@ -205,14 +207,103 @@ public class PostWithDPoPTests : IDisposable
             _sut.PostWithDPoP("https://example.test/token", "x=1", "", out _, out _, out _));
     }
 
-    [Theory]
-    [InlineData(0)]
-    [InlineData(-1)]
-    [InlineData(301)]
-    public void Rejects_an_out_of_range_timeout(int seconds)
+    [Fact]
+    public void Rejects_a_timeout_above_the_maximum()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             _sut.PostWithDPoP("https://example.test/token", "x=1", "proof.jwt",
-                out _, out _, out _, timeoutSeconds: seconds));
+                out _, out _, out _, timeoutSeconds: 301));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public async Task Treats_a_non_positive_timeout_as_unset_rather_than_failing(int seconds)
+    {
+        // ODC sends 0 for an Integer input left unset at the call site rather than the
+        // action's declared default, so 0 must fall back, not throw.
+        var server = ServeOnce(200, "{}");
+
+        _sut.PostWithDPoP(_prefix, "x=1", "proof.jwt",
+            out var status, out _, out _, timeoutSeconds: seconds);
+
+        await server;
+        Assert.Equal(200, status);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task Treats_an_empty_content_type_as_unset(string contentType)
+    {
+        var server = ServeOnce(200, "{}");
+
+        _sut.PostWithDPoP(_prefix, "x=1", "proof.jwt",
+            out _, out _, out _, contentType: contentType);
+
+        await server;
+        Assert.Equal("application/x-www-form-urlencoded", _lastContentType);
+    }
+
+    // --- GetWithDPoP -------------------------------------------------------------
+
+    [Fact]
+    public async Task Get_sends_authorization_dpop_scheme_and_the_proof()
+    {
+        var server = ServeOnce(200, "encrypted.jwe.payload");
+
+        _sut.GetWithDPoP(_prefix, "the-access-token", "the.proof.jwt",
+            out var status, out var body, out var nonce);
+
+        await server;
+
+        Assert.Equal("GET", _lastMethod);
+        Assert.Equal("DPoP the-access-token", _lastAuthorizationHeader);
+        Assert.Equal("the.proof.jwt", _lastDPoPHeader);
+        Assert.Equal(200, status);
+        Assert.Equal("encrypted.jwe.payload", body);
+        Assert.Equal(string.Empty, nonce);
+    }
+
+    [Fact]
+    public async Task Get_never_sends_bearer()
+    {
+        var server = ServeOnce(200, "{}");
+
+        _sut.GetWithDPoP(_prefix, "tok", "proof.jwt", out _, out _, out _);
+
+        await server;
+        Assert.DoesNotContain("Bearer", _lastAuthorizationHeader!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Get_extracts_the_nonce_from_a_401_challenge()
+    {
+        // UserInfo answers 401 with use_dpop_nonce, not 400.
+        var server = ServeOnce(401, """{"error":"use_dpop_nonce"}""",
+            ("DPoP-Nonce", "userinfo-nonce-1"));
+
+        _sut.GetWithDPoP(_prefix, "tok", "proof.jwt",
+            out var status, out _, out var nonce);
+
+        await server;
+
+        Assert.Equal(401, status);
+        Assert.Equal("userinfo-nonce-1", nonce);
+    }
+
+    [Fact]
+    public void Get_rejects_a_missing_access_token()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            _sut.GetWithDPoP("https://example.test/userinfo", "", "proof.jwt",
+                out _, out _, out _));
+    }
+
+    [Fact]
+    public void Get_rejects_a_bad_url()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            _sut.GetWithDPoP("/relative", "tok", "proof.jwt", out _, out _, out _));
     }
 }

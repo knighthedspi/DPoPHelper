@@ -115,6 +115,10 @@ public sealed class DPoPHelper : IDPoPHelper
         return headerSegment + "." + payloadSegment + "." + Base64UrlEncode(signature);
     }
 
+    internal const string DefaultContentType = "application/x-www-form-urlencoded";
+    internal const int DefaultTimeoutSeconds = 30;
+    internal const int MaxTimeoutSeconds = 300;
+
     /// <inheritdoc />
     public void PostWithDPoP(
         string uRL,
@@ -123,37 +127,93 @@ public sealed class DPoPHelper : IDPoPHelper
         out int statusCode,
         out string responseBody,
         out string dPoPNonce,
-        string contentType = "application/x-www-form-urlencoded",
-        int timeoutSeconds = 30)
+        string contentType = DefaultContentType,
+        int timeoutSeconds = DefaultTimeoutSeconds)
     {
-        if (string.IsNullOrWhiteSpace(uRL))
-            throw new ArgumentException("URL is required.", nameof(uRL));
-        if (string.IsNullOrWhiteSpace(dPoPProof))
-            throw new ArgumentException("DPoPProof is required.", nameof(dPoPProof));
-        // An absolute-URI check alone is not enough. On Unix, Uri.TryCreate accepts a
-        // bare path like "/token" as an absolute file:// URI, and it would reach
-        // HttpClient as a NotSupportedException from deep in the stack rather than a
-        // clear message about a misconfigured endpoint. Pin the scheme explicitly.
-        if (!Uri.TryCreate(uRL, UriKind.Absolute, out var uri)
-            || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
-        {
-            throw new ArgumentException(
-                $"URL \"{uRL}\" is not an absolute http or https URI.", nameof(uRL));
-        }
-        if (timeoutSeconds is < 1 or > 300)
-            throw new ArgumentOutOfRangeException(nameof(timeoutSeconds), "TimeoutSeconds must be between 1 and 300.");
-
-        using var request = new HttpRequestMessage(HttpMethod.Post, uri)
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post, ValidateUrl(uRL, nameof(uRL)))
         {
             Content = new StringContent(body ?? string.Empty, Encoding.UTF8)
         };
 
         // StringContent appends "; charset=utf-8", which some strict servers reject on
         // form posts, so the header is set explicitly from the caller's value.
-        request.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(contentType);
-        request.Headers.TryAddWithoutValidation("DPoP", dPoPProof);
+        request.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(
+            string.IsNullOrWhiteSpace(contentType) ? DefaultContentType : contentType);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+        Send(request, dPoPProof, authorization: null, timeoutSeconds,
+            out statusCode, out responseBody, out dPoPNonce);
+    }
+
+    /// <inheritdoc />
+    public void GetWithDPoP(
+        string uRL,
+        string accessToken,
+        string dPoPProof,
+        out int statusCode,
+        out string responseBody,
+        out string dPoPNonce,
+        int timeoutSeconds = DefaultTimeoutSeconds)
+    {
+        if (string.IsNullOrWhiteSpace(accessToken))
+            throw new ArgumentException("AccessToken is required.", nameof(accessToken));
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get, ValidateUrl(uRL, nameof(uRL)));
+
+        // A DPoP-bound token presented as Bearer is rejected; the scheme must be DPoP.
+        Send(request, dPoPProof, "DPoP " + accessToken, timeoutSeconds,
+            out statusCode, out responseBody, out dPoPNonce);
+    }
+
+    private static Uri ValidateUrl(string url, string paramName)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+            throw new ArgumentException("URL is required.", paramName);
+
+        // An absolute-URI check alone is not enough. On Unix, Uri.TryCreate accepts a
+        // bare path like "/token" as an absolute file:// URI, and it would reach
+        // HttpClient as a NotSupportedException from deep in the stack rather than a
+        // clear message about a misconfigured endpoint. Pin the scheme explicitly.
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
+        {
+            throw new ArgumentException(
+                $"URL \"{url}\" is not an absolute http or https URI.", paramName);
+        }
+
+        return uri;
+    }
+
+    private static void Send(
+        HttpRequestMessage request,
+        string dPoPProof,
+        string? authorization,
+        int timeoutSeconds,
+        out int statusCode,
+        out string responseBody,
+        out string dPoPNonce)
+    {
+        if (string.IsNullOrWhiteSpace(dPoPProof))
+            throw new ArgumentException("DPoPProof is required.", nameof(dPoPProof));
+
+        // An unset Integer input arrives from ODC as 0 rather than this action's
+        // declared default, so a non-positive value means "unset" and falls back
+        // instead of failing the call. Only an explicit over-limit value is an error.
+        if (timeoutSeconds > MaxTimeoutSeconds)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(timeoutSeconds),
+                $"TimeoutSeconds must be {MaxTimeoutSeconds} or less.");
+        }
+
+        var effectiveTimeout = timeoutSeconds <= 0 ? DefaultTimeoutSeconds : timeoutSeconds;
+
+        request.Headers.TryAddWithoutValidation("DPoP", dPoPProof);
+        if (authorization is not null)
+            request.Headers.TryAddWithoutValidation("Authorization", authorization);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(effectiveTimeout));
 
         // Send (not SendAsync) avoids sync-over-async blocking on the ODC request thread.
         using var response = Client.Send(request, HttpCompletionOption.ResponseContentRead, cts.Token);

@@ -81,9 +81,42 @@ public interface IDPoPHelper
         [OSParameter(Description = "Value of the DPoP-Nonce response header, or empty when absent.")]
         out string dPoPNonce,
 
-        [OSParameter(Description = "Content-Type of the request body.")]
+        [OSParameter(Description = "Content-Type of the request body. Leave empty for application/x-www-form-urlencoded.")]
         string contentType = "application/x-www-form-urlencoded",
 
-        [OSParameter(Description = "Request timeout in seconds.")]
+        [OSParameter(Description = "Request timeout in seconds. Leave unset or 0 for 30. Maximum 300.")]
+        int timeoutSeconds = 30);
+
+    /// <summary>
+    /// GETs a resource with a DPoP-bound access token and returns the response
+    /// together with any DPoP-Nonce the server supplied.
+    /// </summary>
+    /// <remarks>
+    /// The GET counterpart of <see cref="PostWithDPoP"/>, for userinfo. Sends
+    /// <c>Authorization: DPoP &lt;token&gt;</c> — a DPoP-bound token presented as
+    /// Bearer is rejected. Non-2xx responses are returned, not thrown.
+    /// </remarks>
+    [OSAction(
+        Description = "GETs with Authorization: DPoP and a DPoP header; returns status, body and the DPoP-Nonce response header.")]
+    void GetWithDPoP(
+        [OSParameter(Description = "Absolute URL to GET.")]
+        string uRL,
+
+        [OSParameter(Description = "The access token, sent as \"DPoP <token>\" in the Authorization header.")]
+        string accessToken,
+
+        [OSParameter(Description = "The DPoP proof JWT for this request. Must carry the ath claim.")]
+        string dPoPProof,
+
+        [OSParameter(Description = "HTTP status code of the response.")]
+        out int statusCode,
+
+        [OSParameter(Description = "Raw response body.")]
+        out string responseBody,
+
+        [OSParameter(Description = "Value of the DPoP-Nonce response header, or empty when absent.")]
+        out string dPoPNonce,
+
+        [OSParameter(Description = "Request timeout in seconds. Leave unset or 0 for 30. Maximum 300.")]
         int timeoutSeconds = 30);
 }
