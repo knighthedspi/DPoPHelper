@@ -187,7 +187,11 @@ public class PostWithDPoPTests : IDisposable
     [InlineData("")]
     [InlineData("   ")]
     [InlineData("not-an-absolute-url")]
+    // A bare path parses as an absolute file:// URI on Unix but not on Windows, so an
+    // is-absolute check alone behaves differently per platform.
     [InlineData("/relative/path")]
+    [InlineData("file:///etc/passwd")]
+    [InlineData("ftp://example.test/token")]
     public void Rejects_a_bad_url(string url)
     {
         Assert.Throws<ArgumentException>(() =>

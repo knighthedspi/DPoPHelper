@@ -130,8 +130,16 @@ public sealed class DPoPHelper : IDPoPHelper
             throw new ArgumentException("URL is required.", nameof(uRL));
         if (string.IsNullOrWhiteSpace(dPoPProof))
             throw new ArgumentException("DPoPProof is required.", nameof(dPoPProof));
-        if (!Uri.TryCreate(uRL, UriKind.Absolute, out var uri))
-            throw new ArgumentException($"URL \"{uRL}\" is not an absolute URI.", nameof(uRL));
+        // An absolute-URI check alone is not enough. On Unix, Uri.TryCreate accepts a
+        // bare path like "/token" as an absolute file:// URI, and it would reach
+        // HttpClient as a NotSupportedException from deep in the stack rather than a
+        // clear message about a misconfigured endpoint. Pin the scheme explicitly.
+        if (!Uri.TryCreate(uRL, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
+        {
+            throw new ArgumentException(
+                $"URL \"{uRL}\" is not an absolute http or https URI.", nameof(uRL));
+        }
         if (timeoutSeconds is < 1 or > 300)
             throw new ArgumentOutOfRangeException(nameof(timeoutSeconds), "TimeoutSeconds must be between 1 and 300.");
 
