@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/DPoPHelper/DPoPHelper.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DPoPHelper.Tests/DPoPHelper.Tests.csproj" />
+  </Folder>
+</Solution>

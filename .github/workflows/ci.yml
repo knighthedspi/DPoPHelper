@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push to a PR makes the in-flight run obsolete.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The library is pure ECDSA/JSON, but it is built on Windows and runs on
+        # ODC's Linux containers, so both are worth proving.
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore DPoPHelper.slnx
+
+      - name: Build
+        run: dotnet build DPoPHelper.slnx -c Release --no-restore
+
+      - name: Test
+        run: >
+          dotnet test DPoPHelper.slnx -c Release --no-build
+          --logger "trx;LogFileName=test-results.trx"
+          --logger "console;verbosity=normal"
+          --results-directory ${{ github.workspace }}/test-results
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: test-results/
+          if-no-files-found: warn
+
+  package:
+    name: Package for ODC
+    runs-on: windows-latest
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # Proves the upload artifact still builds, and attaches it to the run so the
+      # zip can be pulled straight from a PR without a local build.
+      - name: Build package
+        shell: pwsh
+        run: ./package.ps1 -SkipTests
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: DPoPHelper-zip
+          path: dist/DPoPHelper.zip
+          if-no-files-found: error
