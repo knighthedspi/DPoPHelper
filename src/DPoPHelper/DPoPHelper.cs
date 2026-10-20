@@ -133,7 +133,7 @@ public sealed class DPoPHelper : IDPoPHelper
         using var request = new HttpRequestMessage(
             HttpMethod.Post, ValidateUrl(uRL, nameof(uRL)))
         {
-            Content = new StringContent(body ?? string.Empty, Encoding.UTF8)
+            Content = new StringContent(body ?? string.Empty, Encoding.UTF8, "application/x-www-form-urlencoded")
         };
 
         // StringContent appends "; charset=utf-8", which some strict servers reject on

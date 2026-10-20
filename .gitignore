@@ -1,7 +1,6 @@
 bin/
 obj/
 artifacts/
-dist/
 test-results/
 TestResults/
 *.user
