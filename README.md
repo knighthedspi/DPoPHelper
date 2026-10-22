@@ -72,6 +72,28 @@ entirely by that header. Endpoint-agnostic — use it for PAR and for token.
 | `ResponseBody` | Text | |
 | `DPoPNonce` | Text | Empty when the server sent no nonce. |
 
+### `GetWithDPoP`
+
+GETs a resource with a DPoP header and returns the response **including the
+`DPoP-Nonce` header**.
+
+It exists for one reason: the platform HTTP actions surface the response body and
+status but not response headers, and the RFC 9449 §8 nonce handshake is driven
+entirely by that header. Endpoint-agnostic — use it for PAR and for token.
+
+| Input | Type | Notes |
+|---|---|---|
+| `URL` | Text | Absolute URL. |
+| `AccessToken` | Text | The access token, sent as `DPoP <token>` in the Authorizatin header. |
+| `DPoPProof` | Text | Sent as the `DPoP` header. |
+| `TimeoutSeconds` | Integer | Optional, defaults to 30. Range 1–300. |
+
+| Output | Type | Notes |
+|---|---|---|
+| `StatusCode` | Integer | |
+| `ResponseBody` | Text | |
+| `DPoPNonce` | Text | Empty when the server sent no nonce. |
+
 **Non-2xx responses are returned, not thrown.** A `400` carrying `use_dpop_nonce` is a
 normal step in the handshake, so the caller branches on `StatusCode`. Only transport
 failures (DNS, TLS, timeout) raise an exception.
